@@ -51,6 +51,7 @@ public final class Main {
             new JComboBox<Tokenizer.Dialect>(Tokenizer.Dialect.values());
     private final JCheckBox crlfBox = new JCheckBox("CRLF", true);
     private final JCheckBox autoClBox = new JCheckBox("自动 Content-Length", true);
+    private final JCheckBox expandBox = new JCheckBox("展开变量", true);
     private final JCheckBox httpsBox = new JCheckBox("报文转回时用 HTTPS", true);
 
     public static void main(String[] args) {
@@ -181,6 +182,8 @@ public final class Main {
         row.add(Box.createHorizontalStrut(8));
         row.add(crlfBox);
         row.add(autoClBox);
+        expandBox.setToolTipText("命令前的 export A=b / A=b / set A=b 会被识别，并在 $A、${A}、%A% 处展开");
+        row.add(expandBox);
         httpsBox.setToolTipText("原始报文的请求行里没有 http/https，只能按这个默认值生成");
         row.add(httpsBox);
         return row;
@@ -237,6 +240,7 @@ public final class Main {
         cfg.dialect = d instanceof Tokenizer.Dialect ? (Tokenizer.Dialect) d : Tokenizer.Dialect.AUTO;
         cfg.crlf = crlfBox.isSelected();
         cfg.autoContentLength = autoClBox.isSelected();
+        cfg.expandVariables = expandBox.isSelected();
 
         List<String> notes = new ArrayList<String>();
         try {

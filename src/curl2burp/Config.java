@@ -12,6 +12,12 @@ public final class Config {
     public boolean autoContentLength = true;
 
     /**
+     * 是否把命令里声明的变量（export A=b / A=b / set A=b / $env:A='b'）
+     * 在 $A、${A}、%A% 出现处展开成值。
+     */
+    public boolean expandVariables = true;
+
+    /**
      * 报文转回 curl 时，Host 里没写端口的情况下用 https 还是 http。
      * 原始报文里没有 scheme，只能由用户定这个默认值。
      */

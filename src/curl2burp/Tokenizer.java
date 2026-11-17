@@ -68,6 +68,15 @@ public final class Tokenizer {
 
     /** 按已确定的方言切词（不做 AUTO 判定）。 */
     public static List<String> tokenizeWith(String raw, Dialect d) throws ParseException {
+        return tokenizeWith(raw, d, null);
+    }
+
+    /**
+     * 按已确定的方言切词，并把 {@code $NAME} / {@code ${NAME}} / {@code %NAME%} 换成值。
+     * vars 为 null 时不做展开（变量名原样留在参数里）。
+     */
+    public static List<String> tokenizeWith(String raw, Dialect d, ShellVars vars)
+            throws ParseException {
         List<String> tokens = new ArrayList<String>();
         if (raw == null) {
             return tokens;
@@ -171,6 +180,13 @@ public final class Tokenizer {
                             continue;
                         }
                     }
+                    if (vars != null) {
+                        int used = expandVar(s, i, vars, cmd || vars.isCmdStyle(), !cmd, ps, out);
+                        if (used > 0) {
+                            i += used;
+                            continue;
+                        }
+                    }
                     out.append(c);
                     i++;
                     continue;
@@ -258,6 +274,13 @@ public final class Tokenizer {
                         i++;
                         continue;
                     }
+                    if (vars != null) {
+                        int used = expandVar(s, i, vars, true, false, false, out);
+                        if (used > 0) {
+                            i += used;
+                            continue;
+                        }
+                    }
                     out.append(c);
                     i++;
                     continue;
@@ -310,6 +333,13 @@ public final class Tokenizer {
                     i++;
                     continue;
                 }
+                if (vars != null && !cmd) {
+                    int used = expandVar(s, i, vars, vars.isCmdStyle(), true, ps, out);
+                    if (used > 0) {
+                        i += used;
+                        continue;
+                    }
+                }
                 if (c == '"') {
                     if (collapseDoubleQuote && i + 1 < n && s.charAt(i + 1) == '"') {
                         out.append('"');
@@ -339,6 +369,105 @@ public final class Tokenizer {
             tokens.add(out.toString());
         }
         return tokens;
+    }
+
+    /**
+     * 尝试在 i 处展开一个变量引用。返回消耗的字符数，0 表示这里不是变量（调用方按字面处理）。
+     * cmd 方言认 %NAME%；POSIX / PowerShell 认 $NAME、${NAME}、${NAME:-默认值}。
+     *
+     * 未声明的变量不替换：让 $BASE 原样留在报文里，比悄悄换成空串更容易发现。
+     * cmd 的 %NAME% 只有声明过才替换 —— 否则 %E4%B8%AD 这种百分号编码会被误当成变量。
+     */
+    private static int expandVar(String s, int i, ShellVars vars, boolean percent, boolean dollar,
+                                 boolean ps, StringBuilder out) {
+        int n = s.length();
+        char c = s.charAt(i);
+
+        if (percent && c == '%') {
+            int p = i + 1;
+            if (p >= n || !ShellVars.isNameStart(s.charAt(p))) {
+                return 0;
+            }
+            int start = p;
+            while (p < n && ShellVars.isNameChar(s.charAt(p))) {
+                p++;
+            }
+            if (p >= n || s.charAt(p) != '%') {
+                return 0;
+            }
+            String name = s.substring(start, p);
+            String v = vars.value(name);
+            if (v == null) {
+                return 0;
+            }
+            out.append(v);
+            return p + 1 - i;
+        }
+
+        if (!dollar || c != '$' || i + 1 >= n) {
+            return 0;
+        }
+        char next = s.charAt(i + 1);
+
+        if (next == '(') {
+            vars.unsupported("$(...)");
+            return 0;
+        }
+
+        if (next == '{') {
+            int close = s.indexOf('}', i + 2);
+            if (close < 0) {
+                return 0;
+            }
+            String expr = s.substring(i + 2, close);
+            if (expr.isEmpty() || !ShellVars.isNameStart(expr.charAt(0))) {
+                return 0;
+            }
+            int k = 0;
+            while (k < expr.length() && ShellVars.isNameChar(expr.charAt(k))) {
+                k++;
+            }
+            String name = expr.substring(0, k);
+            String tail = expr.substring(k);
+            String v = vars.value(name);
+            boolean plus = tail.startsWith(":+") || tail.startsWith("+");
+            boolean minus = tail.startsWith(":-") || tail.startsWith("-");
+            if (plus || minus) {
+                String word = tail.substring(tail.charAt(0) == ':' ? 2 : 1);
+                if (plus) {
+                    out.append(v == null ? "" : word);
+                } else {
+                    out.append(v == null ? word : v);
+                }
+                return close + 1 - i;
+            }
+            if (v == null) {
+                vars.missing(name);
+                return 0;
+            }
+            out.append(v);
+            return close + 1 - i;
+        }
+
+        int p = i + 1;
+        if (ps && s.regionMatches(p, "env:", 0, 4)) {
+            p += 4;
+        }
+        if (p >= n || !ShellVars.isNameStart(s.charAt(p))) {
+            return 0;
+        }
+        int start = p;
+        while (p < n && ShellVars.isNameChar(s.charAt(p))) {
+            p++;
+        }
+        String name = s.substring(start, p);
+        String v = vars.value(name);
+        if (v == null) {
+            vars.missing(name);
+            return 0;
+        }
+        out.append(v);
+        return p - i;
     }
 
     /**

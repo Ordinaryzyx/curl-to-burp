@@ -43,7 +43,7 @@ Windows 下也可以直接双击 `run.bat`。
 | 报文 → curl（在右栏按） | `Ctrl+Enter` |
 | 撤销 / 重做 | `Ctrl+Z` / `Ctrl+Y`（或 `Ctrl+Shift+Z`） |
 
-选项栏还有：输入方言、CRLF / LF 切换、是否自动写 `Content-Length`、报文转回时默认用 HTTPS。
+选项栏还有：输入方言、CRLF / LF 切换、是否自动写 `Content-Length`、是否展开变量、报文转回时默认用 HTTPS。
 
 ## 行为约定
 
@@ -59,6 +59,7 @@ Windows 下也可以直接双击 `run.bat`。
 | 报文转回的格式 | 固定**单行**，body 含换行时用 `$'...'`，可直接粘进终端执行 |
 | 未收录的 curl 选项 | 忽略并在状态栏标 ⚠，不静默丢弃 |
 | `-w` `-o` `-k` `-L` `-m` 等 | 不影响报文，忽略但列出，避免「以为生效了」 |
+| 命令前的变量声明行 | 视为 shell 语句剔除，不参与参数解析，并在状态栏列出变量名 |
 
 ## 三种 shell 方言
 
@@ -72,18 +73,38 @@ Windows 下也可以直接双击 `run.bat`。
 
 默认「自动」判定：出现 `^"` 或 `^` 续行判 cmd，出现反引号续行判 PowerShell，其余按 POSIX。状态栏第一句永远写着本次按哪种方言解析，判错了可以在下拉里手动指定。
 
+## 命令里的变量
+
+实际测试脚本常把地址和 token 抽成变量，粘贴时连声明行一起进来：
+
+```bash
+export https_proxy=http://127.0.0.1:8080
+BASE=https://example.com
+curl -sk -x $https_proxy "$BASE/api/x" -H "Authorization: Bearer $TOKEN"
+```
+
+工具会做两件事：
+
+1. **剥离声明行**。`export A=b`、`A=b`、`set A=b`、`$env:A='b'` 是 shell 语句，不是 curl 参数——留着它们会让 `https_proxy=http://1.2.3.4:8080` 里的 `://` 被误认成 URL，生成出 `GET //1.2.3.4:8080` 这种报文。
+2. **展开引用**。`$A`、`${A}`、`${A:-默认值}`（POSIX / PowerShell），`%A%`（cmd）。单引号内不展开，和 shell 一致。
+
+两条边界，都是为了「错了能看见」：
+
+- **只读文本，不读真实环境变量、不执行 `$(...)`**。同样的输入永远得到同样的报文。
+- **没声明过的变量不替换**，原样留在报文里，并在状态栏提示 `变量没有赋值，已按字面保留: $TOKEN（要展开就在命令前加一行 TOKEN=值）`。悄悄换成空串会得到一个看着正常、实际错的报文，比报错更难查。
+
 ## 构建与测试
 
 ```bash
 build.bat                                  # 编译 + 打包成 curl2burp.jar
-java -cp curl2burp.jar curl2burp.Tests     # 141 条断言
+java -cp curl2burp.jar curl2burp.Tests     # 169 条断言
 ```
 
 `Tests` 覆盖两件事：黄金用例（curl 进 → 报文出）和**往返一致性**（`curl → 报文 → curl → 报文`，两次报文必须逐字节相同）。
 
 ## 范围外
 
-不发包、不做代理、不解析响应；一次只处理第一条 URL；不支持 cookie jar 与 curl 配置文件（`-K`）；不打包 exe。
+不发包、不做代理、不解析响应；一次只处理第一条 URL；不读真实环境变量、不执行命令替换；不支持 cookie jar 与 curl 配置文件（`-K`）；不打包 exe。
 
 ## 授权
 

@@ -560,6 +560,131 @@ public final class Tests {
             }
         });
 
+        // ---- 54 起：命令前的变量声明（export A=b / A=b / set A=b / $env:A='b'） ----
+        test("54 export + $VAR 用于 URL", new Case() {
+            public void run() throws Exception {
+                String cmd = "export https_proxy=http://127.0.0.1:8080\n"
+                        + "BASE=https://service.example.com\n"
+                        + "curl -sk -x $https_proxy \"$BASE/icbc/investmentlinked/indexRegister\" \\\n"
+                        + "-c ck.txt -o /dev/null -w \"warm=%{http_code}\\n\"";
+                String r = conv(cmd);
+                checkEquals("54 请求行", firstLine(r),
+                        "GET /icbc/investmentlinked/indexRegister HTTP/1.1");
+                checkEquals("54 Host", headerValue(r, "Host"), "service.example.com");
+                checkNotContains("54 无 $ 残留", r, "$");
+                checkContains("54 提示已展开", notes, "已展开变量");
+                checkContains("54 提示剔除赋值", notes, "剔除了 2 个变量赋值");
+            }
+        });
+
+        test("55 ${VAR} 与默认值", new Case() {
+            public void run() throws Exception {
+                String cmd = "BASE=http://a.com\n"
+                        + "curl \"${BASE}/x\" -H \"X-A: ${NO_SUCH_VAR_C2B:-fallback}\"";
+                String r = conv(cmd);
+                checkContains("55 ${} 展开", r, "GET /x HTTP/1.1");
+                checkEquals("55 默认值", headerValue(r, "X-A"), "fallback");
+            }
+        });
+
+        test("56 单引号内不展开", new Case() {
+            public void run() throws Exception {
+                String r = conv("BASE=http://a.com\ncurl -H 'X-Raw: $BASE' http://a.com/x");
+                checkEquals("56 单引号保留", headerValue(r, "X-Raw"), "$BASE");
+            }
+        });
+
+        test("57 未声明的变量按字面保留并提示", new Case() {
+            public void run() throws Exception {
+                String r = conv("curl \"http://a.com/$NO_SUCH_VAR_C2B/x\"");
+                checkContains("57 字面保留", firstLine(r), "/$NO_SUCH_VAR_C2B/x");
+                checkContains("57 提示", notes, "变量没有赋值，已按字面保留");
+                checkContains("57 提示含变量名", notes, "$NO_SUCH_VAR_C2B");
+            }
+        });
+
+        test("58 头与 body 里用变量", new Case() {
+            public void run() throws Exception {
+                String cmd = "TOKEN=abc.def\nNAME=张三\n"
+                        + "curl -H \"Authorization: Bearer $TOKEN\" "
+                        + "--data-raw \"{\\\"n\\\":\\\"$NAME\\\"}\" http://a.com/api";
+                String r = conv(cmd);
+                checkEquals("58 头", headerValue(r, "Authorization"), "Bearer abc.def");
+                checkEquals("58 body 字节数", headerValue(r, "Content-Length"), "14");
+                checkContains("58 body", r, "{\"n\":\"张三\"}");
+            }
+        });
+
+        test("59 PowerShell $env:X 声明", new Case() {
+            public void run() throws Exception {
+                String cmd = "$env:BASE = 'https://a.com'\n"
+                        + "curl \"$env:BASE/v1/ping\" `\n"
+                        + "  -H \"X-A: 1\"";
+                String r = conv(cmd);
+                checkContains("59 请求行", firstLine(r), "GET /v1/ping HTTP/1.1");
+                checkEquals("59 Host", headerValue(r, "Host"), "a.com");
+                checkEquals("59 头", headerValue(r, "X-A"), "1");
+            }
+        });
+
+        test("60 cmd set + %VAR%", new Case() {
+            public void run() throws Exception {
+                String cmd = "set BASE=https://a.com\n"
+                        + "curl -H \"X-A: %BASE%\" \"%BASE%/p\"";
+                String r = conv(cmd);
+                checkContains("60 请求行", firstLine(r), "GET /p HTTP/1.1");
+                checkEquals("60 头展开", headerValue(r, "X-A"), "https://a.com");
+            }
+        });
+
+        test("61 关掉展开后变量原样保留", new Case() {
+            public void run() throws Exception {
+                Config cfg = new Config();
+                cfg.expandVariables = false;
+                List<String> out = new ArrayList<String>();
+                String r = CurlToHttp.convert("BASE=http://a.com\ncurl \"$BASE/x\"", cfg, out);
+                // 不展开时 $BASE 只能被当成主机名，报文里一眼能看出来
+                checkEquals("61 Host 原样", headerValue(r, "Host"), "$BASE");
+                checkNotContains("61 无展开提示", join(out, "；"), "已展开变量");
+            }
+        });
+
+        test("62 赋值行不会被当成 URL / %编码不误伤", new Case() {
+            public void run() throws Exception {
+                String r = conv("export https_proxy=http://1.2.3.4:8080\n"
+                        + "curl -x $https_proxy 'http://a.com/a%20b/c%2Fd'");
+                checkEquals("62 请求行", firstLine(r), "GET /a%20b/c%2Fd HTTP/1.1");
+                checkEquals("62 Host", headerValue(r, "Host"), "a.com");
+                checkNotContains("62 代理值不进报文", r, "1.2.3.4");
+            }
+        });
+
+        test("63 首行赋值与命令同一行", new Case() {
+            public void run() throws Exception {
+                String r = conv("BASE=http://a.com curl \"$BASE/x\"");
+                checkContains("63 请求行", firstLine(r), "GET /x HTTP/1.1");
+                checkEquals("63 Host", headerValue(r, "Host"), "a.com");
+            }
+        });
+
+        test("64 只有赋值行没有命令", new Case() {
+            public void run() {
+                try {
+                    String r = conv("BASE=http://a.com\nexport X=1\n");
+                    checkTrue("64 应报错", false, r);
+                } catch (ParseException e) {
+                    checkContains("64 报错信息", e.getMessage(), "没有可解析的命令");
+                }
+            }
+        });
+
+        test("65 值里引用前面的变量", new Case() {
+            public void run() throws Exception {
+                String r = conv("BASE=http://a.com\nAPI=$BASE/v1\ncurl \"$API/x\"");
+                checkContains("65 请求行", firstLine(r), "GET /v1/x HTTP/1.1");
+            }
+        });
+
         println("");
         println("结果: " + pass + " 通过, " + fail + " 失败");
         if (fail > 0) {
