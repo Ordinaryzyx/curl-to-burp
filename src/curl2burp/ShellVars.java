@@ -20,7 +20,10 @@ import java.util.Set;
 public final class ShellVars {
 
     private final Map<String, String> vars = new LinkedHashMap<String, String>();
-    private final Set<String> used = new LinkedHashSet<String>();
+    /** 值来自界面上的「全局变量」（命令里没有重新赋值）的变量名。 */
+    private final Set<String> fromGlobal = new LinkedHashSet<String>();
+    private final Set<String> usedLocal = new LinkedHashSet<String>();
+    private final Set<String> usedGlobal = new LinkedHashSet<String>();
     private final Set<String> missing = new LinkedHashSet<String>();
     private final Set<String> unsupported = new LinkedHashSet<String>();
 
@@ -34,7 +37,23 @@ public final class ShellVars {
 
     /** 剥掉命令前的赋值行；剩下的命令文本从 {@link #command()} 取。 */
     public static ShellVars scan(String raw, Tokenizer.Dialect dialect) {
+        return scan(raw, dialect, null);
+    }
+
+    /**
+     * @param preset 界面上的全局变量，命令里的同名赋值优先于它
+     */
+    public static ShellVars scan(String raw, Tokenizer.Dialect dialect, Map<String, String> preset) {
         ShellVars sv = new ShellVars();
+        if (preset != null) {
+            for (Map.Entry<String, String> e : preset.entrySet()) {
+                if (e.getKey() == null || e.getValue() == null || !isName(e.getKey())) {
+                    continue;
+                }
+                sv.vars.put(e.getKey(), e.getValue());
+                sv.fromGlobal.add(e.getKey());
+            }
+        }
         if (raw == null) {
             return sv;
         }
@@ -85,11 +104,24 @@ public final class ShellVars {
 
     /** 取变量值；未声明返回 null。 */
     public String value(String name) {
+        return lookup(name);
+    }
+
+    private String lookup(String name) {
         String v = vars.get(name);
         if (v != null) {
-            used.add(name);
+            if (fromGlobal.contains(name)) {
+                usedGlobal.add(name);
+            } else {
+                usedLocal.add(name);
+            }
         }
         return v;
+    }
+
+    /** 界面上是否配置了全局变量（用于状态栏一句话提示）。 */
+    public int globalCount() {
+        return fromGlobal.size();
     }
 
     /** 声明行写的是 set/setx（cmd 风格），此时 %NAME% 也该展开。 */
@@ -111,8 +143,11 @@ public final class ShellVars {
         if (declared > 0) {
             out.add("剔除了 " + declared + " 个变量赋值（它们不是 curl 的参数）");
         }
-        if (!used.isEmpty()) {
-            out.add("已展开变量: " + join(used, ", "));
+        if (!usedLocal.isEmpty()) {
+            out.add("已展开变量: " + join(usedLocal, ", "));
+        }
+        if (!usedGlobal.isEmpty()) {
+            out.add("已展开全局变量: " + join(usedGlobal, ", "));
         }
         if (!missing.isEmpty()) {
             StringBuilder sb = new StringBuilder();
@@ -124,7 +159,8 @@ public final class ShellVars {
                 sb.append('$').append(name);
             }
             out.add("变量没有赋值，已按字面保留: " + sb
-                    + "（要展开就在命令前加一行 " + missing.iterator().next() + "=值）");
+                    + "（要展开就在命令前加一行 " + missing.iterator().next()
+                    + "=值，或用工具栏的「全局变量」设一次）");
         }
         if (!unsupported.isEmpty()) {
             out.add("不执行命令替换 " + join(unsupported, ", ") + "，已按字面保留");
@@ -281,7 +317,10 @@ public final class ShellVars {
         if (cmdKeyword) {
             cmdStyle = true;
         }
-        vars.put(name, expandKnown(v));
+        String expanded = expandKnown(v);
+        // 命令里自己又声明了一次 → 从这一刻起它不再算「全局变量」
+        fromGlobal.remove(name);
+        vars.put(name, expanded);
         declared++;
     }
 
@@ -315,7 +354,7 @@ public final class ShellVars {
                 p++;
             }
             String name = v.substring(start, p);
-            String val = vars.get(name);
+            String val = lookup(name);
             if (brace) {
                 if (p < n && v.charAt(p) == '}') {
                     p++;

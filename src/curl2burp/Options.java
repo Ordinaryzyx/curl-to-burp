@@ -37,6 +37,8 @@ public final class Options {
     private static final LinkedHashSet<String> IGNORED_VALUE_LONG = new LinkedHashSet<String>();
     /** 需要挑战-响应的认证方式：报文里不会有 Authorization。 */
     private static final LinkedHashSet<String> CHALLENGE_AUTH_LONG = new LinkedHashSet<String>();
+    /** 代理类选项：报文里没有代理这一说，必须提醒用户自己在 Burp / Yakit 里配。 */
+    private static final LinkedHashSet<String> PROXY_LONG = new LinkedHashSet<String>();
 
     static {
         // curl 8.x 里对「发什么」没有影响的长选项（无值）
@@ -92,6 +94,11 @@ public final class Options {
         for (String c : challenge) {
             CHALLENGE_AUTH_LONG.add(c);
         }
+        String[] proxies = {"--proxy", "--preproxy", "--socks4", "--socks4a",
+                "--socks5", "--socks5-hostname"};
+        for (String p : proxies) {
+            PROXY_LONG.add(p);
+        }
     }
 
     /** multipart 的一个字段。-F 会解释 @file，--form-string 不会。 */
@@ -134,6 +141,9 @@ public final class Options {
         String userAgent = null;
         String referer = null;
         String range = null;
+        /** 命令里指定的代理（-x / --proxy / --socks*），只用于提示，不进报文。 */
+        String proxyOpt = null;
+        String proxyValue = null;
         List<String> urls = new ArrayList<String>();
         LinkedHashSet<String> ignored = new LinkedHashSet<String>();
 
@@ -225,6 +235,10 @@ public final class Options {
                 } else if (IGNORED_VALUE_LONG.contains(name)) {
                     String v = valueOrNext(tokens, idx, name, inline);
                     ignored.add(name);
+                    if (PROXY_LONG.contains(name)) {
+                        proxyOpt = name;
+                        proxyValue = v;
+                    }
                     if ("--resolve".equals(name) || "--connect-to".equals(name)) {
                         spec.note(name + " 把域名钉到了指定 IP；Burp 按它自己的 DNS/Host 映射发，"
                                 + "要固定 IP 请在 Burp 里配映射");
@@ -301,8 +315,12 @@ public final class Options {
                         continue;
                     }
                     if (IGNORED_VALUE_SHORT.indexOf(ch) >= 0) {
-                        if (k + 1 >= cluster.length()) {
-                            nextValue(tokens, idx, "-" + ch, pos);
+                        String v = k + 1 < cluster.length()
+                                ? cluster.substring(k + 1)
+                                : nextValue(tokens, idx, "-" + ch, pos);
+                        if (ch == 'x') {
+                            proxyOpt = "-x";
+                            proxyValue = v;
                         }
                         ignored.add("-" + ch);
                         k = cluster.length();
@@ -465,8 +483,12 @@ public final class Options {
         if (ignored.contains("-L") || ignored.contains("--location")) {
             spec.note("-L: Burp Repeater 不会自动跟随重定向");
         }
-        if (ignored.contains("-x") || ignored.contains("--proxy")) {
-            spec.note("-x/--proxy: 本工具不发包；若你原本指向 Burp，直接在 Burp 里发即可");
+        if (proxyOpt != null) {
+            String p = proxyValue == null || proxyValue.isEmpty() ? "（值为空）" : proxyValue;
+            spec.note("⚠ 命令里指定了代理 " + proxyOpt + " " + p
+                    + "：本工具只生成报文、不走代理，报文里也没有代理这一项。"
+                    + "要复现这条请求的出口，请自行在 Burp（Settings → Network → "
+                    + "Upstream proxy servers）或 Yakit（MITM 的代理/拨号配置）里设置同样的代理");
         }
         return spec;
     }

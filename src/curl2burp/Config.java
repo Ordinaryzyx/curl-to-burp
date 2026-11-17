@@ -1,6 +1,9 @@
 package curl2burp;
 
-/** 转换配置。GUI 的三个可选项与它一一对应，测试里直接构造。 */
+import java.util.LinkedHashMap;
+import java.util.Map;
+
+/** 转换配置。GUI 的可选项与它一一对应，测试里直接构造。 */
 public final class Config {
 
     public Tokenizer.Dialect dialect = Tokenizer.Dialect.AUTO;
@@ -16,6 +19,12 @@ public final class Config {
      * 在 $A、${A}、%A% 出现处展开成值。
      */
     public boolean expandVariables = true;
+
+    /**
+     * 界面上「全局变量」按钮里设的 名字=值。
+     * 命令文本里自己声明过同名变量时，以文本为准。
+     */
+    public final Map<String, String> globalVars = new LinkedHashMap<String, String>();
 
     /**
      * 报文转回 curl 时，Host 里没写端口的情况下用 https 还是 http。

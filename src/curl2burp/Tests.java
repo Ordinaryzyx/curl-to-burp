@@ -6,6 +6,7 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * 无依赖断言集。只测外部可观察行为：curl 进 → 报文出。
@@ -685,6 +686,98 @@ public final class Tests {
             }
         });
 
+        test("66 全局变量：BASE 与 https_proxy 都不用在命令里声明", new Case() {
+            public void run() throws Exception {
+                Config cfg = new Config();
+                cfg.globalVars.put("BASE", "https://service.example.com");
+                cfg.globalVars.put("https_proxy", "http://94.183.206.215:8080");
+                String r = conv("curl -sk -x $https_proxy "
+                        + "\"$BASE/icbc/investmentlinked/indexRegister\" \\\n"
+                        + "-c ck.txt -o /dev/null -w \"warm=%{http_code}\\n\"", cfg);
+                checkEquals("66 请求行", firstLine(r),
+                        "GET /icbc/investmentlinked/indexRegister HTTP/1.1");
+                checkEquals("66 Host", headerValue(r, "Host"), "service.example.com");
+                checkNotContains("66 报文里没有代理", r, "94.183.206.215");
+                checkContains("66 提示全局变量", notes, "已展开全局变量");
+                checkContains("66 提示含变量名", notes, "https_proxy");
+            }
+        });
+
+        test("67 命令里的声明覆盖同名全局变量", new Case() {
+            public void run() throws Exception {
+                Config cfg = new Config();
+                cfg.globalVars.put("BASE", "https://global.example.com");
+                String r = conv("BASE=https://local.example.com\ncurl \"$BASE/x\"", cfg);
+                checkEquals("67 Host 用命令里的值", headerValue(r, "Host"), "local.example.com");
+                checkNotContains("67 不算全局变量", notes, "已展开全局变量");
+            }
+        });
+
+        test("68 全局变量用于头和 body", new Case() {
+            public void run() throws Exception {
+                Config cfg = new Config();
+                cfg.globalVars.put("TOKEN", "abc123");
+                cfg.globalVars.put("V", "1");
+                String r = conv("curl -H \"Authorization: Bearer $TOKEN\" "
+                        + "-d \"a=$V\" http://a.com/api", cfg);
+                checkEquals("68 头", headerValue(r, "Authorization"), "Bearer abc123");
+                checkContains("68 body", r, "a=1");
+                checkEquals("68 CL", headerValue(r, "Content-Length"), "3");
+            }
+        });
+
+        test("69 变量没赋值时提示可以去设全局变量", new Case() {
+            public void run() throws Exception {
+                conv("curl \"$BASE/x\"");
+                checkContains("69 提示含说明", notes, "全局变量");
+            }
+        });
+
+        test("70 -x/--proxy 提示自行设置代理", new Case() {
+            public void run() throws Exception {
+                String r = conv("curl -x http://127.0.0.1:8080 http://a.com/x");
+                checkEquals("70 请求行不受影响", firstLine(r), "GET /x HTTP/1.1");
+                checkContains("70 提示代理地址", notes, "http://127.0.0.1:8080");
+                checkContains("70 提示自行设置", notes, "自行");
+                checkContains("70 提示上游代理", notes, "Upstream proxy");
+
+                conv("curl --proxy=http://10.0.0.1:3128 http://a.com/y");
+                checkContains("70 长格式也提示", notes, "10.0.0.1:3128");
+
+                conv("curl --socks5 127.0.0.1:1080 http://a.com/z");
+                checkContains("70 socks 也提示", notes, "127.0.0.1:1080");
+            }
+        });
+
+        test("71 关掉展开后全局变量也不生效", new Case() {
+            public void run() throws Exception {
+                Config cfg = new Config();
+                cfg.expandVariables = false;
+                cfg.globalVars.put("BASE", "https://service.example.com");
+                String r = conv("curl \"$BASE/x\"", cfg);
+                checkEquals("71 Host 原样", headerValue(r, "Host"), "$BASE");
+            }
+        });
+
+        test("72 全局变量文本的解析与回写", new Case() {
+            public void run() {
+                List<String> warnings = new ArrayList<String>();
+                Map<String, String> m = GlobalVars.parse(
+                        "# 注释\n"
+                                + "\n"
+                                + "BASE=https://a.com\n"
+                                + "  TOKEN = abc 123  \n"
+                                + "没有等号的一行\n"
+                                + "1BAD=x\n"
+                                + "=x\n", warnings);
+                checkEquals("72 有效条数", String.valueOf(m.size()), "2");
+                checkEquals("72 值去掉两端空白", m.get("TOKEN"), "abc 123");
+                checkEquals("72 非法行数", String.valueOf(warnings.size()), "3");
+                checkEquals("72 回写", GlobalVars.format(m).trim(),
+                        "BASE=https://a.com\nTOKEN=abc 123");
+            }
+        });
+
         println("");
         println("结果: " + pass + " 通过, " + fail + " 失败");
         if (fail > 0) {
@@ -760,6 +853,13 @@ public final class Tests {
     private static String conv(String curl) throws ParseException {
         List<String> out = new ArrayList<String>();
         String r = CurlToHttp.convert(curl, new Config(), out);
+        notes = join(out, "；");
+        return r;
+    }
+
+    private static String conv(String curl, Config cfg) throws ParseException {
+        List<String> out = new ArrayList<String>();
+        String r = CurlToHttp.convert(curl, cfg, out);
         notes = join(out, "；");
         return r;
     }

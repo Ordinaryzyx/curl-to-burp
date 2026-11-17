@@ -23,7 +23,7 @@ public final class CurlToHttp {
         Config c = cfg == null ? Config.defaults() : cfg;
         Tokenizer.Dialect dialect = Tokenizer.resolveDialect(curlText, c.dialect);
         // 命令前的赋值行先剥掉：它们是 shell 语句，不是 curl 参数。
-        ShellVars vars = ShellVars.scan(curlText, dialect);
+        ShellVars vars = ShellVars.scan(curlText, dialect, c.globalVars);
         List<String> tokens = Tokenizer.tokenizeWith(
                 vars.command(), dialect, c.expandVariables ? vars : null);
         if (tokens.isEmpty()) {

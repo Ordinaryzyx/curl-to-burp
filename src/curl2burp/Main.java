@@ -1,6 +1,7 @@
 package curl2burp;
 
 import java.awt.BorderLayout;
+import java.awt.Color;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
@@ -15,7 +16,9 @@ import java.io.IOException;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 import javax.swing.AbstractAction;
 import javax.swing.BorderFactory;
@@ -24,6 +27,7 @@ import javax.swing.JButton;
 import javax.swing.JCheckBox;
 import javax.swing.JComboBox;
 import javax.swing.JComponent;
+import javax.swing.JDialog;
 import javax.swing.JFileChooser;
 import javax.swing.JFrame;
 import javax.swing.JLabel;
@@ -53,6 +57,11 @@ public final class Main {
     private final JCheckBox autoClBox = new JCheckBox("自动 Content-Length", true);
     private final JCheckBox expandBox = new JCheckBox("展开变量", true);
     private final JCheckBox httpsBox = new JCheckBox("报文转回时用 HTTPS", true);
+    private final JButton varsButton = new JButton("全局变量");
+    /** 界面上的全局变量，落盘在 ~/.curl2burp/vars.txt。 */
+    private final Map<String, String> globalVars = new LinkedHashMap<String, String>(GlobalVars.load());
+    private Color normalFg;
+    private static final Color WARN_FG = new Color(0xC0, 0x50, 0x00);
 
     public static void main(String[] args) {
         try {
@@ -91,6 +100,7 @@ public final class Main {
 
         status.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
         status.setToolTipText("");
+        normalFg = status.getForeground();
 
         frame.setLayout(new BorderLayout());
         frame.add(north, BorderLayout.NORTH);
@@ -105,6 +115,7 @@ public final class Main {
         bindCtrlEnter(output, true);
         installUndo(input);
         installUndo(output);
+        updateVarsButton();
     }
 
     private void show() {
@@ -171,6 +182,14 @@ public final class Main {
         bar.add(open);
         bar.add(save);
         bar.add(clear);
+        bar.add(Box.createHorizontalStrut(12));
+        varsButton.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                doEditVars();
+            }
+        });
+        bar.add(varsButton);
         return bar;
     }
 
@@ -241,6 +260,7 @@ public final class Main {
         cfg.crlf = crlfBox.isSelected();
         cfg.autoContentLength = autoClBox.isSelected();
         cfg.expandVariables = expandBox.isSelected();
+        cfg.globalVars.putAll(globalVars);
 
         List<String> notes = new ArrayList<String>();
         try {
@@ -331,6 +351,98 @@ public final class Main {
         String t = text == null || text.isEmpty() ? " " : text;
         status.setText(t);
         status.setToolTipText(t);
+        boolean warn = t.indexOf('\u26a0') >= 0
+                || t.startsWith("解析失败") || t.startsWith("内部错误");
+        status.setForeground(warn ? WARN_FG : normalFg);
+    }
+
+    // ------------------------------------------------------------ 全局变量
+
+    private void updateVarsButton() {
+        int n = globalVars.size();
+        varsButton.setText(n == 0 ? "全局变量" : "全局变量 (" + n + ")");
+        if (n == 0) {
+            varsButton.setToolTipText("设置 BASE、TOKEN 这类反复用到的变量，命令里写 $BASE 即可");
+        } else {
+            StringBuilder names = new StringBuilder();
+            for (String name : globalVars.keySet()) {
+                if (names.length() > 0) {
+                    names.append(", ");
+                }
+                names.append(name);
+            }
+            varsButton.setToolTipText("已设置: " + names + "（命令里自己写了同名赋值时以命令为准）");
+        }
+    }
+
+    private void doEditVars() {
+        final JDialog dlg = new JDialog(frame, "全局变量", true);
+        final JTextArea area = new JTextArea(GlobalVars.format(globalVars), 12, 52);
+        area.setFont(MONO);
+        area.setTabSize(4);
+        installUndo(area);
+
+        JLabel hint = new JLabel("<html>一行一个 <b>名字=值</b>，例如 <b>BASE=https://service.example.com</b>，"
+                + "命令里写 $BASE、${BASE} 即可展开；<br>"
+                + "命令前面自己写了 <b>export BASE=...</b> 时，以命令里的为准。"
+                + "变量值只在本机保存，不会写进报文之外的任何地方。<br>"
+                + "保存位置：" + (GlobalVars.defaultFile() == null
+                        ? "（取不到用户目录，仅本次会话有效）"
+                        : GlobalVars.defaultFile().getAbsolutePath()) + "</html>");
+
+        JButton save = new JButton("保存");
+        save.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                List<String> warnings = new ArrayList<String>();
+                Map<String, String> parsed = GlobalVars.parse(area.getText(), warnings);
+                if (!warnings.isEmpty()) {
+                    StringBuilder sb = new StringBuilder("<html>");
+                    for (String w : warnings) {
+                        sb.append(w).append("<br>");
+                    }
+                    sb.append("<br>仍要保存其余 ").append(parsed.size()).append(" 个变量吗？</html>");
+                    int r = JOptionPane.showConfirmDialog(dlg, sb.toString(), "有 "
+                            + warnings.size() + " 行无法识别", JOptionPane.YES_NO_OPTION,
+                            JOptionPane.WARNING_MESSAGE);
+                    if (r != JOptionPane.YES_OPTION) {
+                        return;
+                    }
+                }
+                globalVars.clear();
+                globalVars.putAll(parsed);
+                String err = GlobalVars.save(globalVars);
+                updateVarsButton();
+                dlg.dispose();
+                if (err == null) {
+                    setStatus("全局变量已保存（" + globalVars.size() + " 个）");
+                } else {
+                    setStatus("\u26a0 全局变量本次会话内生效，但写入磁盘失败: " + err);
+                }
+            }
+        });
+        JButton cancel = new JButton("取消");
+        cancel.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                dlg.dispose();
+            }
+        });
+
+        JPanel buttons = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
+        buttons.add(save);
+        buttons.add(cancel);
+
+        JPanel top = new JPanel(new BorderLayout());
+        top.add(hint, BorderLayout.NORTH);
+
+        dlg.setLayout(new BorderLayout());
+        dlg.add(top, BorderLayout.NORTH);
+        dlg.add(new JScrollPane(area), BorderLayout.CENTER);
+        dlg.add(buttons, BorderLayout.SOUTH);
+        dlg.pack();
+        dlg.setLocationRelativeTo(frame);
+        dlg.setVisible(true);
     }
 
     private static String join(List<String> items, String sep) {
