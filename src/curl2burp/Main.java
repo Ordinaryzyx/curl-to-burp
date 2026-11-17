@@ -2,13 +2,18 @@ package curl2burp;
 
 import java.awt.BorderLayout;
 import java.awt.Color;
+import java.awt.Container;
 import java.awt.Dimension;
 import java.awt.FlowLayout;
 import java.awt.Font;
+import java.awt.FontMetrics;
+import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
 import java.awt.event.ActionEvent;
 import java.awt.event.ActionListener;
+import java.awt.event.ComponentAdapter;
+import java.awt.event.ComponentEvent;
 import java.awt.event.InputEvent;
 import java.awt.event.KeyEvent;
 import java.io.File;
@@ -37,6 +42,7 @@ import javax.swing.JScrollPane;
 import javax.swing.JSplitPane;
 import javax.swing.JTextArea;
 import javax.swing.KeyStroke;
+import javax.swing.ScrollPaneConstants;
 import javax.swing.SwingUtilities;
 import javax.swing.UIManager;
 import javax.swing.undo.UndoManager;
@@ -50,7 +56,11 @@ public final class Main {
     private final JFrame frame = new JFrame("curl2burp — curl 转 Burp 原始报文");
     private final JTextArea input = new JTextArea();
     private final JTextArea output = new JTextArea();
-    private final JLabel status = new JLabel(" ");
+    /** 状态栏用可换行的文本域，长提示自动折行，不用再拖宽窗口。 */
+    private final JTextArea status = new JTextArea(" ");
+    private JScrollPane statusScroll;
+    /** 状态栏最多占几行，再多就出竖向滚动条，避免挤掉正文。 */
+    private static final int STATUS_MAX_ROWS = 6;
     private final JComboBox<Tokenizer.Dialect> dialectBox =
             new JComboBox<Tokenizer.Dialect>(Tokenizer.Dialect.values());
     private final JCheckBox crlfBox = new JCheckBox("CRLF", true);
@@ -85,10 +95,10 @@ public final class Main {
         input.setTabSize(4);
         output.setTabSize(4);
 
-        JScrollPane left = new JScrollPane(input);
-        left.setBorder(BorderFactory.createTitledBorder("curl 命令"));
-        JScrollPane right = new JScrollPane(output);
-        right.setBorder(BorderFactory.createTitledBorder("HTTP 请求报文"));
+        JPanel left = buildPane("curl 命令", input, "复制 curl",
+                "复制左侧这条 curl 命令的全部内容", "左侧的 curl 命令");
+        JPanel right = buildPane("HTTP 请求报文", output, "复制报文",
+                "复制右侧报文（含空行与 body 原文）", "右侧的报文");
 
         JSplitPane split = new JSplitPane(JSplitPane.HORIZONTAL_SPLIT, left, right);
         split.setResizeWeight(0.5);
@@ -98,18 +108,45 @@ public final class Main {
         north.add(buildToolbar(), BorderLayout.NORTH);
         north.add(buildOptions(), BorderLayout.SOUTH);
 
+        status.setEditable(false);
+        status.setLineWrap(true);
+        status.setWrapStyleWord(false);
+        status.setOpaque(false);
+        status.setRows(1);
+        status.setTabSize(4);
         status.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
         status.setToolTipText("");
         normalFg = status.getForeground();
 
+        statusScroll = new JScrollPane(status);
+        statusScroll.setBorder(null);
+        statusScroll.setOpaque(false);
+        statusScroll.getViewport().setOpaque(false);
+        statusScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        statusScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
+
         frame.setLayout(new BorderLayout());
         frame.add(north, BorderLayout.NORTH);
         frame.add(split, BorderLayout.CENTER);
-        frame.add(status, BorderLayout.SOUTH);
+        frame.add(statusScroll, BorderLayout.SOUTH);
         frame.setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         frame.setSize(1000, 620);
         frame.setMinimumSize(new Dimension(720, 480));
         frame.setLocationRelativeTo(null);
+
+        // 窗口宽度一变，折行行数就变，状态栏高度跟着重算
+        frame.addComponentListener(new ComponentAdapter() {
+            @Override
+            public void componentResized(ComponentEvent e) {
+                // 等布局把新宽度算完再量，否则拿到的是旧宽度
+                SwingUtilities.invokeLater(new Runnable() {
+                    @Override
+                    public void run() {
+                        refreshStatusRows();
+                    }
+                });
+            }
+        });
 
         bindCtrlEnter(input, false);
         bindCtrlEnter(output, true);
@@ -120,6 +157,40 @@ public final class Main {
 
     private void show() {
         frame.setVisible(true);
+    }
+
+    /** 一栏 = 标题 + 复制按钮 + 文本域。复制按钮就贴在各自的框上，不用再猜复制的是哪个框。 */
+    private JPanel buildPane(String title, final JTextArea area, String copyLabel,
+            String copyTip, final String what) {
+        JLabel label = new JLabel(title);
+        label.setFont(label.getFont().deriveFont(Font.BOLD));
+        label.setBorder(BorderFactory.createEmptyBorder(0, 4, 0, 0));
+
+        JButton copy = new JButton(copyLabel);
+        Font bf = copy.getFont();
+        copy.setFont(bf.deriveFont(bf.getSize2D() - 0.5f));
+        copy.setMargin(new Insets(0, 8, 0, 8));
+        copy.setFocusable(false);
+        copy.setToolTipText(copyTip);
+        copy.addActionListener(new ActionListener() {
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                doCopy(area, what);
+            }
+        });
+
+        JPanel head = new JPanel(new BorderLayout());
+        head.setBorder(BorderFactory.createEmptyBorder(2, 2, 2, 4));
+        head.add(label, BorderLayout.WEST);
+        head.add(copy, BorderLayout.EAST);
+
+        JScrollPane scroll = new JScrollPane(area);
+        scroll.setBorder(BorderFactory.createLineBorder(new Color(0x9A, 0x9A, 0x9A)));
+
+        JPanel pane = new JPanel(new BorderLayout());
+        pane.add(head, BorderLayout.NORTH);
+        pane.add(scroll, BorderLayout.CENTER);
+        return pane;
     }
 
     private JPanel buildToolbar() {
@@ -139,14 +210,6 @@ public final class Main {
             @Override
             public void actionPerformed(ActionEvent e) {
                 doReverse();
-            }
-        });
-
-        JButton copy = new JButton("复制");
-        copy.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                doCopy();
             }
         });
 
@@ -178,7 +241,6 @@ public final class Main {
 
         bar.add(convert);
         bar.add(toCurl);
-        bar.add(copy);
         bar.add(open);
         bar.add(save);
         bar.add(clear);
@@ -296,16 +358,16 @@ public final class Main {
         }
     }
 
-    private void doCopy() {
-        String text = output.getText();
+    private void doCopy(JTextArea area, String what) {
+        String text = area.getText();
         if (text == null || text.isEmpty()) {
-            setStatus("没有可复制的内容，先点「转换」");
+            setStatus(what + "是空的，没有可复制的内容");
             return;
         }
         try {
             Toolkit.getDefaultToolkit().getSystemClipboard()
                     .setContents(new StringSelection(text), null);
-            setStatus("已复制 " + text.getBytes(UTF8).length + " 字节");
+            setStatus("已复制" + what + "，" + text.getBytes(UTF8).length + " 字节");
         } catch (RuntimeException e) {
             setStatus("复制失败: " + e.getMessage());
         }
@@ -354,6 +416,70 @@ public final class Main {
         boolean warn = t.indexOf('\u26a0') >= 0
                 || t.startsWith("解析失败") || t.startsWith("内部错误");
         status.setForeground(warn ? WARN_FG : normalFg);
+        // 内容变了行数也可能变，重新算高度
+        refreshStatusRows();
+        status.setCaretPosition(0);
+    }
+
+    /** 按当前宽度重算状态栏高度，保证长提示整段可见（最多 STATUS_MAX_ROWS 行）。 */
+    private void refreshStatusRows() {
+        int avail = status.getWidth();
+        if (avail <= 0) {
+            avail = frame.getContentPane().getWidth();
+        }
+        if (avail <= 0) {
+            avail = 984;
+        }
+        Insets ins = status.getInsets();
+        avail -= (ins.left + ins.right);
+        int rows = Math.max(1, Math.min(STATUS_MAX_ROWS, wrappedRows(status.getText(), avail)));
+        if (status.getRows() != rows) {
+            status.setRows(rows);
+            // 让外层重新走一遍布局，状态栏高度立刻跟着变
+            Container parent = statusScroll.getParent();
+            if (parent != null) {
+                parent.revalidate();
+                parent.repaint();
+            } else {
+                statusScroll.revalidate();
+            }
+        }
+    }
+
+    /** 估算文本折行后占几行：逐字符累加宽度，超宽就换行。 */
+    private int wrappedRows(String s, int availPx) {
+        if (s == null || s.isEmpty() || availPx <= 0) {
+            return 1;
+        }
+        FontMetrics fm = status.getFontMetrics(status.getFont());
+        if (fm == null) {
+            return 1;
+        }
+        int rows = 1;
+        int used = 0;
+        for (int i = 0; i < s.length(); ) {
+            int cp = s.codePointAt(i);
+            i += Character.charCount(cp);
+            if (cp == '\n') {
+                rows++;
+                used = 0;
+                continue;
+            }
+            int w = fm.charWidth(cp);
+            if (w <= 0) {
+                w = fm.stringWidth(new String(Character.toChars(cp)));
+            }
+            if (w <= 0) {
+                w = 6;
+            }
+            if (used > 0 && used + w > availPx) {
+                rows++;
+                used = w;
+            } else {
+                used += w;
+            }
+        }
+        return rows;
     }
 
     // ------------------------------------------------------------ 全局变量
