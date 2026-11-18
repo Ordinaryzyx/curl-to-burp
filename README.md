@@ -1,8 +1,26 @@
 # curl2burp
 
-把 **curl 命令** 与 **原始 HTTP 报文** 互相转换的离线小工具。粘一条 curl，得到一段能直接粘进 Burp Repeater / Yakit 的报文；改完的报文，也能变回一条单行 curl。
+**curl 命令 ⇄ 原始 HTTP 报文**，双向转换的离线小工具：粘一条 curl，得到能直接粘进 Burp Repeater / Yakit 的报文；在 Burp 里改完包，也能变回一条可直接执行的单行 curl。
 
-Java 8 + Swing，零第三方依赖，单个 jar，不联网。
+![Java](https://img.shields.io/badge/Java-8%2B-orange)
+![deps](https://img.shields.io/badge/dependencies-0-brightgreen)
+![tests](https://img.shields.io/badge/tests-191%20passing-brightgreen)
+![size](https://img.shields.io/badge/jar-121%20KB-lightgrey)
+![offline](https://img.shields.io/badge/network-none-blue)
+
+![curl2burp 界面：左栏粘 curl，右栏出原始报文，底部状态栏列出本次方言、展开的变量与被忽略的选项](docs/screenshot.png)
+
+Java 8 + Swing，零第三方依赖，单个 jar，全程离线，只做文本转换——发不发、发给谁，仍然由你决定。
+
+## 它解决的几件事
+
+| | |
+|---|---|
+| **双向** | curl → 报文、报文 → 单行 curl；`报文 → curl → 报文` 往返**逐字节一致**，191 条断言守着 |
+| **算得对** | `Content-Length` 按 body 的实际字节数（中文 3 字节）；`../`、`//`、`%00` 原样进请求行，不规范化 |
+| **认得方言** | POSIX/bash、cmd、PowerShell 的引号与续行规则不同，自动判定，判错了可手动指定 |
+| **看得见变量** | `export A=b` / `set A=b` / `$env:A='b'` 声明行剥离并展开；常用变量可用「全局变量」一次设好 |
+| **不静默丢弃** | 忽略的选项、`-x` 代理、未声明变量都会在状态栏列出（⚠ 转橙色），不猜、不吞 |
 
 ---
 
@@ -27,11 +45,17 @@ curl2burp 就是补这一步的：全程离线、单文件、不联网，只做�
 
 ## 快速开始
 
-需要 JRE 8 或更高版本。
+需要 JRE 8 或更高版本，没有别的依赖。
 
 ```bash
 java -jar curl2burp.jar
 ```
+
+三步走完一个来回：
+
+1. **左栏粘 curl** —— 连 `export BASE=...` 这类声明行一起粘也没关系，声明行会被剥掉、`$BASE` 会被展开。
+2. **按 `Ctrl+Enter`** —— 右栏出原始报文，点右上角「复制报文」整段复制，粘进 Burp Repeater / Yakit 就能改包重放。
+3. **改完再按 `Ctrl+Enter`** —— 把 Burp 里的报文粘进右栏、按 `Ctrl+Enter`，左栏出**单行** curl，点「复制 curl」贴回给智能体继续验证。
 
 Windows 下也可以直接双击 `run.bat`。它用 `javaw` 起窗口版，黑色控制台窗口**立刻关掉**（不会挂在那儿），所以误点控制台也不会把工具一起关掉。想在前台看日志就用上面的 `java -jar`。
 
